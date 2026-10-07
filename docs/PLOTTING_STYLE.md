@@ -89,6 +89,6 @@ ax.fill_between(generation, mean - std, mean + std, color=color, alpha=0.2)
 
 ## Output Locations
 
-- Reviewer preview PDFs should go under `results/reviewer/plots_pdf/`.
-- Stable plot scripts should live under `scripts/reviewer/`.
+- Each figure script lives under `experiments/` (e.g. `experiments/fig3_pca.py`).
+- Its outputs (PDF, PNG, CSV) go under `results/<figure>/` (e.g. `results/fig3/`).
 - Do not overwrite manuscript source figures unless explicitly requested.
