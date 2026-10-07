@@ -1,5 +1,6 @@
 *.qpy
 *.json
+data/
 wandb/latest-run
 wandb/
 error/

@@ -16,6 +16,7 @@ dependencies = [
     "squlearn==0.8.4",
     "pennylane==0.34.0",
     "autoray==0.6.7",
+    "seaborn>=0.13,<0.14",
 ]
 
 [dependency-groups]

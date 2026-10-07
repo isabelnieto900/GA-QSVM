@@ -4,7 +4,7 @@ from qiskit_machine_learning.algorithms import QSVC
 from qiskit_machine_learning.kernels import FidelityQuantumKernel
 import wandb
 
-from ga_qsvm.datasets import get_dataset_loader
+from ga_qsvm.runners.train import get_dataset_loader
 from qoop.backend.constant import operations_with_rotations
 from qoop.evolution import divider, normalizer
 from qoop.evolution.crossover import onepoint

@@ -1,0 +1,5 @@
+dataset,n_features,components_90,components_95,paper_components_95
+digits,64,22,30,30
+fashion,784,84,188,200
+wine,13,8,10,10
+cancer,30,6,10,10

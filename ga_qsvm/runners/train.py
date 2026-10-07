@@ -4,7 +4,7 @@ from qiskit_machine_learning.kernels import FidelityQuantumKernel
 import numpy as np
 import wandb
 
-from ga_qsvm.datasets import get_dataset_loader
+from ga_qsvm.data import paper_split
 from ga_qsvm.search.space import build_base_hyperparameter_space, iter_parameter_sets
 from ga_qsvm.tracking.wandb import build_train_wandb_config
 from qoop.backend.constant import operations_with_rotations
@@ -15,6 +15,13 @@ from qoop.evolution.environment_synthesis import MetadataSynthesis
 from qoop.evolution.generator import by_num_rotations_and_cnot
 from qoop.evolution.mutate import bitflip_mutate_with_normalizer
 from qoop.evolution.threshold import synthesis_threshold
+
+
+def get_dataset_loader(name):
+    def load(training_size=None, test_size=None, n_features=None, **_):
+        return paper_split(name, n_features)
+
+    return load
 
 
 class TrainFidelityQSVMFitness:

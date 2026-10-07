@@ -1,135 +1,76 @@
-# Source code for paper entitled "Flexible Genetic Algorithm for Quantum Support Vector Machines"
+# GA-QSVM: Flexible Genetic Algorithm for Quantum Support Vector Machines
 
-This repository contains an implementation of a Genetic Algorithm-based Quantum Support Vector Machine (GA-QSVM) for classification tasks. The project combines quantum computing with machine learning techniques to optimize quantum circuits for classification.
-
-Paper: https://arxiv.org/pdf/2511.19160
-
-Bibtex for citation:
+Fork of [vutuanhai237/GA-QSVM](https://github.com/vutuanhai237/GA-QSVM), the code
+for the paper [Flexible Genetic Algorithm for Quantum Support Vector Machines](https://arxiv.org/abs/2511.19160).
+The goal of this fork is a simplified, step-by-step reproduction of the paper,
+one figure at a time, as a base for further modifications.
 
 ```
 @misc{duc2025flexiblegeneticalgorithmquantum,
-      title={Flexible Genetic Algorithm for Quantum Support Vector Machines}, 
+      title={Flexible Genetic Algorithm for Quantum Support Vector Machines},
       author={Nguyen Minh Duc and Vu Tuan Hai and Le Bin Ho and Tran Nguyen Lan},
       year={2025},
       eprint={2511.19160},
       archivePrefix={arXiv},
       primaryClass={quant-ph},
-      url={https://arxiv.org/abs/2511.19160}, 
+      url={https://arxiv.org/abs/2511.19160},
 }
 ```
 
+## Setup
 
-## Table of Contents
-
-- [Project Overview](#project-overview)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Usage](#usage)
-  - [Training](#training)
-  - [Evaluation](#evaluation)
-  - [Command-line Arguments](#command-line-arguments)
-- [Datasets](#datasets)
-- [Project Structure](#project-structure)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
-
-## Project Overview
-
-Key features:
-- Quantum circuit optimization using genetic algorithms
-- Integration with Qiskit for quantum computing
-- Support for multiple classification datasets
-- Hyperparameter tuning capabilities
-- Distributed training support
-- Experiment tracking with Weights & Biases (wandb)
-
-## Requirements
-
-The project requires the following dependencies:
-```
-numpy==1.26.4
-scikit-learn==1.6.0
-scipy
-matplotlib
-tqdm
-qiskit==1.3.1
-qiskit-machine-learning==0.8.2
-wandb==0.19.8
-```
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/vutuanhai237/GA-QSVM.git
-cd GA-QSVM
-```
-
-2. Sync the project environment with `uv`:
 ```bash
 uv sync --dev
+uv run pytest -q
 ```
 
-## Usage
+## Reproduction roadmap
 
-### Training
+| Step | Paper | Status | Command |
+|------|-------|--------|---------|
+| 1. Data preparation and PCA | Section 5.1, Figure 3 | done | `uv run python experiments/fig3_pca.py` |
+| 2. GA core and hyperparameter study | Section 4, Figure 4 | pending | |
+| 3. Optimal 7-qubit circuits | Figure 5 | pending | |
+| 4. Model comparison (fixed split, k-fold) | Figure 6 | pending | |
+| 5. Transfer learning | Figure 7 | pending | |
+| 6. Quantum noise | extension | pending | |
 
-Run training from the package CLI:
+### Step 1: data preparation (Figure 3)
 
-```bash
-uv run python -m ga_qsvm.cli.train --depth 4 --num-circuit 8 --qubits 3 4 5 --num-machines 3 --id 0 --training-size 300 --test-size 50 --data digits
-```
+All dataset handling lives in `ga_qsvm/data.py`:
 
-### Evaluation
+- `load_dataset(name)`: full Digits, Wine, Breast Cancer (scikit-learn) or
+  Fashion-MNIST (downloaded once into `data/`, same files as `keras.datasets`).
+- `paper_split(name, n_features)`: the fixed stratified split used by the GA
+  (100 train / 100 test; Wine 100 / 78), then MinMaxScaler and PCA to
+  `n_features` components, both fitted on the training split only. The output
+  is bit-identical to the original authors' `data/split.py`.
+- `explained_variance_curve(name)`: cumulative PCA explained variance of the
+  full MinMax-scaled dataset.
 
-Run evaluation from the package CLI:
+`experiments/fig3_pca.py` writes `results/fig3/fig3_pca.{pdf,png}` and CSVs.
+Components needed for 95% explained variance:
 
-```bash
-uv run python -m ga_qsvm.cli.eval --rx 1 --ry 2 --rz 3 --num-qubits 4 --prob-mutate 0.1 --data wine
-```
+| Dataset | This repo | Paper |
+|---------|-----------|-------|
+| Digits | 30 | 30 |
+| Fashion | 188 | 200 |
+| Wine | 10 | 10 |
+| Breast Cancer | 10 | 10 |
 
-### Command-line Arguments
+The Fashion value is 187-188 for every reasonable preprocessing (MinMax, /255,
+raw pixels, train-only), so the paper's 200 appears to be a rounded value.
+Note that Table 2 of the paper lists 5620 Digits and 592 Breast Cancer
+instances; scikit-learn provides 1797 and 569, which is what the code uses.
 
-Training (`ga_qsvm.cli.train`):
-- `--depth`: Circuit depth(s) to try (default: [4, 5, 6])
-- `--num-circuit`: Number of circuits to try in parallel (default: range(4, 33, 4))
-- `--num-generation`: Number of generations for genetic algorithm (default: [100])
-- `--prob-mutate`: Mutation probabilities to try (default: [0.01, 0.1])
-- `--qubits`: Number of qubits to try (default: [3, 4, 5, 6, 7, 8])
-- `--training-size`: Size of training dataset (default: 100)
-- `--test-size`: Size of test dataset (default: 50)
-- `--num-machines`: Number of machines for cross-validation (default: 3)
-- `--id`: Machine identifier (default: 0)
-- `--start-index`: Index to start from in base combinations, ie. when the running fail, use this to continue the benchmarking (default: 0)
-- `--data`: Dataset to use ('wine', 'digits', or 'cancer') (default: 'wine')
+## Project structure
 
-Evaluation (`ga_qsvm.cli.eval`):
-- `--rx`: Number of RX rotations
-- `--ry`: Number of RY rotations
-- `--rz`: Number of RZ rotations
-- `--num-qubits`: Number of qubits
-- `--prob-mutate`: Mutation probability
-- `--data`: Dataset to use ('digits', 'wine', or 'cancer')
-
-## Datasets
-
-The project supports the following datasets:
-- Wine dataset
-- Digits dataset
-- Breast Cancer dataset
-
-## Project Structure
-
-- `ga_qsvm/cli/`: Package CLIs for training and evaluation
-- `ga_qsvm/datasets/`: Runtime dataset registry and split preparation
-- `ga_qsvm/runners/`: Runtime runner wiring
-- `ga_qsvm/search/`: Hyperparameter search-space helpers
-- `requirements.txt`: Project dependencies
-- `qoop/`: Quantum Object Optimizer package
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+- `ga_qsvm/data.py`: datasets, paper split, preprocessing.
+- `ga_qsvm/runners/`, `ga_qsvm/cli/`: GA training/evaluation entry points (to be reworked in step 2).
+- `qoop/`: Quantum Object Optimizer package with the GA operators (to be trimmed in step 2).
+- `experiments/`: one script per paper figure.
+- `results/`: figure outputs.
+- `docs/PLOTTING_STYLE.md`: plotting conventions for paper figures.
 
 ## Acknowledgments
 
