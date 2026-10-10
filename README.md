@@ -139,13 +139,16 @@ caption ("n = 5, ncircuit = 16, p = 0.1, d = 5n, nCX = 2n"):
   used p = 0.1. Here `p` is applied.
 
 `--base original` (default) uses the script's values, `--base caption` the
-caption's. The full original study is 18 configurations x 10 runs x 200
-generations, about 45 hours on a 6-core laptop with PQK (about 5 s per
-generation); `--repeats` and `--num-generation` reduce it.
+caption's; both can be given at once. All GA runs are independent and run in
+parallel, one per core (`--jobs`, default: all cores). One PQK fitness
+evaluation takes about 1 s of one core, so the full original study
+(18 configurations x 10 runs x 200 generations) is about 150 core-hours per
+base: about 10 hours on 16 cores, or 45 hours on a 6-core laptop.
+`--repeats` and `--num-generation` reduce it.
 
 ```bash
-uv run python experiments/fig4_hyperparams.py --repeats 3 --num-generation 100
-uv run python experiments/fig4_hyperparams.py --plot-only --repeats 3 --num-generation 100
+uv run python experiments/fig4_hyperparams.py --base original caption --repeats 3 --num-generation 100
+uv run python experiments/fig4_hyperparams.py --base original caption --repeats 3 --num-generation 100 --plot-only
 ```
 
 ## Running the experiments on another machine
@@ -166,30 +169,38 @@ be copied back. The code must be pushed to the fork first.
    Digits, Wine and Breast Cancer come with scikit-learn; nothing else is
    downloaded for the GA experiments.
 
-2. Run Figure 4 with both base configurations. Each command evaluates the
-   circuits of one generation in parallel (at most `ncircuit` = 20 processes),
-   so on a machine with many cores run both at once and split the cores with
-   `--workers`. `nohup` keeps them running after closing the terminal:
+2. Run Figure 4 with both base configurations in one command. It runs one GA
+   per core (all cores by default; `--jobs N` to leave some free) and prints a
+   line each time a run finishes. `nohup` keeps it running after closing the
+   terminal:
 
    ```bash
-   nohup uv run python experiments/fig4_hyperparams.py --base original --workers 16 > fig4_original.log 2>&1 &
-   nohup uv run python experiments/fig4_hyperparams.py --base caption --workers 16 > fig4_caption.log 2>&1 &
-   tail -f fig4_original.log
+   nohup uv run python experiments/fig4_hyperparams.py --base original caption > fig4.log 2>&1 &
+   tail -f fig4.log
    ```
 
-   The defaults reproduce the authors' study (PQK, 10 runs x 200 generations).
-   Use `--repeats 3 --num-generation 100` for a shorter version; keep the same
-   values in every later command, since they select the runs folder.
+   The defaults reproduce the authors' study (PQK, 10 runs x 200 generations,
+   about 300 core-hours for both bases). Use `--repeats 3 --num-generation 100`
+   for a shorter version; keep the same values in every later command, since
+   they select the runs folder. Each process needs a few hundred MB of RAM.
 
-3. If a run is interrupted, launch the same command again: finished GA runs
-   are skipped. To redraw the figure from whatever has finished:
+3. If the study is interrupted, launch the same command again: finished GA
+   runs are skipped. To redraw the figures from whatever has finished:
 
    ```bash
-   uv run python experiments/fig4_hyperparams.py --base original --plot-only
+   uv run python experiments/fig4_hyperparams.py --base original caption --plot-only
+   ```
+
+   The GA runs for the next figures (all datasets, kernels and qubit counts)
+   can be parallelized the same way:
+
+   ```bash
+   uv run python experiments/run_ga.py --dataset digits wine cancer --kernel fqk pqk --qubits 3 4 5 6 7 --seed 0 --jobs 30
    ```
 
 4. Copy the results back: everything is in `results/fig4/` (one folder per
-   base, with `fig4_hyperparams.{pdf,png}`, `fig4_curves.csv` and `runs/`).
+   base, with `fig4_hyperparams.{pdf,png}`, `fig4_curves.csv`, `study.json`
+   and `runs/`).
 
 ## Project structure
 
