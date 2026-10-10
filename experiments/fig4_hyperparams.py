@@ -12,15 +12,17 @@ Two base configurations:
   10 runs per configuration, no early stopping.
 - ``caption``: the values in the Figure 4 caption: d = 5n = 25, nCX = 2n = 10.
 
-Each GA run is saved under ``results/fig4/runs/`` and skipped if it already
-exists, so the study can be stopped and resumed, and the figure can be redrawn
-with ``--plot-only``.
+All GA runs are independent and run in parallel, one process per run
+(``--jobs``, default: all cores). Each run is saved under
+``results/fig4/<base>-<kernel>/runs/`` and skipped if it already exists, so the
+study can be stopped and resumed, and the figure can be redrawn with
+``--plot-only``.
 
 Usage:
-    uv run python experiments/fig4_hyperparams.py
+    uv run python experiments/fig4_hyperparams.py --base original caption
     uv run python experiments/fig4_hyperparams.py --repeats 3 --num-generation 100
     uv run python experiments/fig4_hyperparams.py --sweeps num_circuit --repeats 1
-    uv run python experiments/fig4_hyperparams.py --plot-only
+    uv run python experiments/fig4_hyperparams.py --base original caption --plot-only
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ import numpy as np
 import seaborn as sns
 
 from ga_qsvm.data import paper_split
-from ga_qsvm.ga import GAConfig, run_ga
+from ga_qsvm.ga import GAConfig, GATask, run_tasks
 from ga_qsvm.kernels import FQK_BACKENDS, KERNELS, QSVMFitness
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -75,29 +77,42 @@ def sweep_points(base: dict, sweeps: list[str]):
             yield sweep, value, {**base, sweep: value}
 
 
-def run_study(args, runs_dir: Path) -> None:
-    fitness = QSVMFitness(paper_split(DATASET, NUM_QUBITS), args.kernel, args.max_iter, args.fqk_backend)
-    jobs = {}
-    for _, _, params in sweep_points(BASES[args.base], args.sweeps):
-        for seed in range(args.repeats):
-            jobs.setdefault(run_name(params, seed), (params, seed))
+def runs_dir_for(args, base: str) -> Path:
+    output_dir = args.output_dir / f"{base}-{args.kernel}"
+    return output_dir / "runs" / f"g{args.num_generation}"
 
-    pending = [(name, job) for name, job in jobs.items() if not (runs_dir / name / "summary.json").exists()]
-    print(f"{len(jobs)} runs in the study, {len(jobs) - len(pending)} already done, {len(pending)} to run")
-    for index, (name, (params, seed)) in enumerate(pending, start=1):
-        config = GAConfig(
-            num_qubits=NUM_QUBITS,
-            num_generation=args.num_generation,
-            patience=args.num_generation,
-            seed=seed,
-            **params,
-        )
-        start = time.perf_counter()
-        result = run_ga(config, fitness, max_workers=args.workers, verbose=False)
-        result.save(runs_dir / name)
+
+def run_study(args) -> None:
+    """Run every missing GA of the selected bases, one process per GA."""
+    fitness = QSVMFitness(paper_split(DATASET, NUM_QUBITS), args.kernel, args.max_iter, args.fqk_backend)
+    tasks = {}
+    for base in args.base:
+        runs_dir = runs_dir_for(args, base)
+        for _, _, params in sweep_points(BASES[base], args.sweeps):
+            for seed in range(args.repeats):
+                output = runs_dir / run_name(params, seed)
+                config = GAConfig(
+                    num_qubits=NUM_QUBITS,
+                    num_generation=args.num_generation,
+                    patience=args.num_generation,
+                    seed=seed,
+                    **params,
+                )
+                tasks.setdefault(output, GATask(f"{base}/{output.name}", config, fitness, output))
+
+    pending = [task for output, task in tasks.items() if not (output / "summary.json").exists()]
+    # Longest runs (largest populations) first, so they do not finish last on their own.
+    pending.sort(key=lambda task: task.config.num_circuit, reverse=True)
+    print(f"{len(tasks)} runs in the study, {len(tasks) - len(pending)} already done, {len(pending)} to run")
+    start = time.perf_counter()
+    for index, summary in enumerate(run_tasks(pending, args.jobs), start=1):
+        elapsed = (time.perf_counter() - start) / 60
+        if "error" in summary:
+            print(f"[{index}/{len(pending)}] {summary['name']}: FAILED {summary['error']}", flush=True)
+            continue
         print(
-            f"[{index}/{len(pending)}] {name}: best {result.best_fitness:.3f} "
-            f"({len(result.history)} generations, {time.perf_counter() - start:.0f} s)",
+            f"[{index}/{len(pending)}] {summary['name']}: best {summary['best_fitness']:.3f} "
+            f"({summary['seconds'] / 60:.1f} min; {elapsed:.0f} min elapsed)",
             flush=True,
         )
 
@@ -107,10 +122,11 @@ def load_history(run_dir: Path) -> np.ndarray:
         return np.array([float(row["best_fitness"]) for row in csv.DictReader(handle)])
 
 
-def collect_curves(args, runs_dir: Path) -> list[dict]:
+def collect_curves(args, base: str) -> list[dict]:
     """Mean and std of the per-generation best fitness over the available runs."""
+    runs_dir = runs_dir_for(args, base)
     rows = []
-    for sweep, value, params in sweep_points(BASES[args.base], args.sweeps):
+    for sweep, value, params in sweep_points(BASES[base], args.sweeps):
         histories = [
             load_history(runs_dir / run_name(params, seed))
             for seed in range(args.repeats)
@@ -181,33 +197,37 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--base", choices=list(BASES), default="original")
+    parser.add_argument("--base", nargs="+", choices=list(BASES), default=["original"])
     parser.add_argument("--sweeps", nargs="+", choices=list(SWEEPS), default=list(SWEEPS))
     parser.add_argument("--repeats", type=int, default=10, help="GA runs per configuration (seeds 0..repeats-1)")
     parser.add_argument("--num-generation", type=int, default=200)
     parser.add_argument("--kernel", choices=KERNELS, default="pqk")
     parser.add_argument("--max-iter", type=int, default=None, help="cap QSVM solver iterations during the GA")
     parser.add_argument("--fqk-backend", choices=FQK_BACKENDS, default="statevector")
-    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--jobs", type=int, default=None, help="GA runs at the same time (default: all cores)")
     parser.add_argument("--plot-only", action="store_true", help="redraw the figure from the saved runs")
-    parser.add_argument("--output-dir", type=Path, default=None, help="default: results/fig4/<base>-<kernel>")
+    parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "results" / "fig4")
     args = parser.parse_args(argv)
 
-    output_dir = args.output_dir or REPO_ROOT / "results" / "fig4" / f"{args.base}-{args.kernel}"
-    runs_dir = output_dir / "runs" / f"g{args.num_generation}"
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "study.json").write_text(json.dumps({**vars(args), "output_dir": output_dir}, indent=2, default=str))
-
+    for base in args.base:
+        runs_dir_for(args, base).mkdir(parents=True, exist_ok=True)
     if not args.plot_only:
-        run_study(args, runs_dir)
-    rows = collect_curves(args, runs_dir)
-    if not rows:
-        print("No finished runs to plot.")
-        return 1
-    write_csv(output_dir / "fig4_curves.csv", rows)
-    plot(rows, args.sweeps, output_dir)
-    print(f"Saved to {output_dir}/")
-    return 0
+        run_study(args)
+
+    status = 0
+    for base in args.base:
+        output_dir = args.output_dir / f"{base}-{args.kernel}"
+        rows = collect_curves(args, base)
+        if not rows:
+            print(f"{base}: no finished runs to plot.")
+            status = 1
+            continue
+        study = {**vars(args), "base": base, "base_values": BASES[base]}
+        (output_dir / "study.json").write_text(json.dumps(study, indent=2, default=str))
+        write_csv(output_dir / "fig4_curves.csv", rows)
+        plot(rows, args.sweeps, output_dir)
+        print(f"{base}: saved to {output_dir}/")
+    return status
 
 
 if __name__ == "__main__":
