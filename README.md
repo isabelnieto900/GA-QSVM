@@ -29,7 +29,8 @@ uv run pytest -q
 | Step | Paper | Status | Command |
 |------|-------|--------|---------|
 | 1. Data preparation and PCA | Section 5.1, Figure 3 | done | `uv run python experiments/fig3_pca.py` |
-| 2. GA core and hyperparameter study | Section 4, Figure 4 | pending | |
+| 2a. GA core | Section 4, Algorithm 2 | done | `uv run python experiments/run_ga.py --dataset wine --qubits 3` |
+| 2b. Hyperparameter study | Figure 4 | script ready | `uv run python experiments/fig4_hyperparams.py` |
 | 3. Optimal 7-qubit circuits | Figure 5 | pending | |
 | 4. Model comparison (fixed split, k-fold) | Figure 6 | pending | |
 | 5. Transfer learning | Figure 7 | pending | |
@@ -63,15 +64,141 @@ raw pixels, train-only), so the paper's 200 appears to be a rounded value.
 Note that Table 2 of the paper lists 5620 Digits and 592 Breast Cancer
 instances; scikit-learn provides 1797 and 569, which is what the code uses.
 
+### Step 2a: genetic algorithm (Section 4)
+
+- `ga_qsvm/circuits.py`: gate pool `{H, RX, RY, RZ, CX}`, random circuit
+  generator, crossover, mutation and normalizers.
+- `ga_qsvm/kernels.py`: QSVM with the Fidelity Quantum Kernel (FQK) or the
+  Projected Quantum Kernel (PQK, squlearn), and `QSVMFitness` (Eq. 8: test
+  accuracy of a QSVM trained with the circuit as feature map).
+- `ga_qsvm/ga.py`: `GAConfig` (metadata M of Eq. 12) and `run_ga` (Algorithm 2):
+  elitist selection of the best half, one-point crossover, bit-flip mutation,
+  stop when the best fitness exceeds 0.99 or does not improve for 50 generations.
+- `experiments/run_ga.py`: command-line runner. Each run is saved to
+  `results/ga/<dataset>-<kernel>-n<qubits>-seed<seed>/` (`best_circuit.qpy`,
+  `best_circuit.txt`, `summary.json`, `history.csv`).
+
+```bash
+uv run python experiments/run_ga.py --dataset digits --kernel fqk --qubits 3 4 5 6 7 --seed 0
+```
+
+Defaults are the paper's default configuration: `d = 5n`, `nCX = 2n`,
+`ncircuit = 16`, `p = 0.1`, 100 generations.
+
+**Fast FQK.** Qiskit's `FidelityQuantumKernel` builds and samples one circuit
+per pair of samples (1-4 min per fitness evaluation on a laptop). The default
+`--fqk-backend statevector` computes the same kernel from statevectors
+(\|<psi_i|psi_j>\|^2 with the same PSD projection as Qiskit). On 18 test
+circuits the accuracies are identical and the kernel matrices differ by at
+most 1e-14, about 100x faster. Use `--fqk-backend qiskit` for the original path.
+
+**Paper text vs. code.** The GA is a line-by-line port of the authors' `qoop`
+code (checked with identical random seeds: same circuits, same fitness
+history). By default it reproduces what the code did, which differs from the
+paper text in some places. Each difference can be switched on with a flag:
+
+| Paper text | Original code (default) | Flag for the paper version / fix |
+|------------|-------------------------|----------------------------------|
+| Normalizer truncates circuits deeper than `d` and adds CX if fewer than `nCX` | Forces exactly `n` rotations: cuts after the n-th rotation or appends RX | `--normalizer-mode depth_cnot` |
+| Crossover cuts both parents at a depth (Fig. 2b) | Cuts after rotation number `n/2` | `--crossover-mode depth` |
+| `d` is the circuit depth | `d * n` gate slots, but a `zip` bug keeps only one of four random counts for the H gates, so circuits are shorter (n=5, d=25: about 42 gates, real depth about 17) | `--fill-all-slots` |
+| `(nRx, nRy, nRz)` are part of the metadata | Sampled per circuit, biased toward RX (n=5: about 2.4 RX vs 1.2 RZ) | `--rotations RX RY RZ` or `--rotation-mode uniform` |
+| Mutation replaces a gate with a different one | Can redraw the same gate | `--mutation-distinct` |
+| Elitism keeps the best half | The copied parents are mutated too | `--keep-elites` |
+| Fewer QSVM iterations during the GA | Solver always runs to convergence | `--max-iter N` |
+
+Other notes:
+
+- Algorithm 2 writes the stop condition as `f < tau`; the code stops when the
+  best fitness is `> 0.99`, plus a patience of 50 generations not in the paper.
+- The fitness is the accuracy on the same test split that is reported, as the
+  paper states.
+- The normalizer and mutation interact: a mutation that adds a rotation makes
+  the normalizer truncate the tail of the circuit, so circuits tend to lose CX
+  gates over the generations.
+- Upstream commits between Feb 2025 and the 2026 refactor removed CX from the
+  generator and did not pass `prob_mutate` to the mutation (always 0.1). This
+  port follows the version consistent with the paper (2n CX, `p` is used).
+- Runs are reproducible with `--seed`; the original had no global seed.
+
+### Step 2b: hyperparameter study (Figure 4)
+
+`experiments/fig4_hyperparams.py` runs the GA on Digits with n = 5 and varies
+one hyperparameter per panel: (a) `d` in 5-25, (b) `ncircuit` in 4-20,
+(c) `nCX` in 5-25, (d) `p` in 0.001-0.5. It plots the best fitness of each
+generation, mean and standard deviation over repeated runs. Runs are saved in
+`results/fig4/<base>-<kernel>/runs/` and skipped when they already exist, so
+the study can be resumed; `--plot-only` redraws the figure.
+
+The authors' script for this figure (`benchmark.py`, Sep 2025) differs from the
+caption ("n = 5, ncircuit = 16, p = 0.1, d = 5n, nCX = 2n"):
+
+- base values `d = 35`, `nCX = 14` (the `5n`, `2n` values for n = 7), not 25 and 10;
+- PQK kernel, 200 generations, 10 runs per configuration, no early stopping;
+- `prob_mutate` was not passed to the mutation, so every curve of panel (d)
+  used p = 0.1. Here `p` is applied.
+
+`--base original` (default) uses the script's values, `--base caption` the
+caption's. The full original study is 18 configurations x 10 runs x 200
+generations, about 45 hours on a 6-core laptop with PQK (about 5 s per
+generation); `--repeats` and `--num-generation` reduce it.
+
+```bash
+uv run python experiments/fig4_hyperparams.py --repeats 3 --num-generation 100
+uv run python experiments/fig4_hyperparams.py --plot-only --repeats 3 --num-generation 100
+```
+
+## Running the experiments on another machine
+
+The GA studies are long; they can run on a bigger machine and the results can
+be copied back. The code must be pushed to the fork first.
+
+1. Install uv and the environment (Linux/macOS):
+
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   git clone https://github.com/isabelnieto900/GA-QSVM.git
+   cd GA-QSVM
+   uv sync --dev
+   uv run pytest -q
+   ```
+
+   Digits, Wine and Breast Cancer come with scikit-learn; nothing else is
+   downloaded for the GA experiments.
+
+2. Run Figure 4 with both base configurations. Each command evaluates the
+   circuits of one generation in parallel (at most `ncircuit` = 20 processes),
+   so on a machine with many cores run both at once and split the cores with
+   `--workers`. `nohup` keeps them running after closing the terminal:
+
+   ```bash
+   nohup uv run python experiments/fig4_hyperparams.py --base original --workers 16 > fig4_original.log 2>&1 &
+   nohup uv run python experiments/fig4_hyperparams.py --base caption --workers 16 > fig4_caption.log 2>&1 &
+   tail -f fig4_original.log
+   ```
+
+   The defaults reproduce the authors' study (PQK, 10 runs x 200 generations).
+   Use `--repeats 3 --num-generation 100` for a shorter version; keep the same
+   values in every later command, since they select the runs folder.
+
+3. If a run is interrupted, launch the same command again: finished GA runs
+   are skipped. To redraw the figure from whatever has finished:
+
+   ```bash
+   uv run python experiments/fig4_hyperparams.py --base original --plot-only
+   ```
+
+4. Copy the results back: everything is in `results/fig4/` (one folder per
+   base, with `fig4_hyperparams.{pdf,png}`, `fig4_curves.csv` and `runs/`).
+
 ## Project structure
 
 - `ga_qsvm/data.py`: datasets, paper split, preprocessing.
-- `ga_qsvm/runners/`, `ga_qsvm/cli/`: GA training/evaluation entry points (to be reworked in step 2).
-- `qoop/`: Quantum Object Optimizer package with the GA operators (to be trimmed in step 2).
-- `experiments/`: one script per paper figure.
+- `ga_qsvm/circuits.py`, `ga_qsvm/kernels.py`, `ga_qsvm/ga.py`: genetic algorithm.
+- `experiments/`: one script per paper figure, plus `run_ga.py`.
 - `results/`: figure outputs.
 - `docs/PLOTTING_STYLE.md`: plotting conventions for paper figures.
 
 ## Acknowledgments
 
-This project uses the QOOP (Quantum Object Optimizer) package developed by Vu Tuan Hai, Nguyen Tan Viet, and Le Bin Ho.
+The GA operators are ported from the QOOP (Quantum Object Optimizer) package developed by Vu Tuan Hai, Nguyen Tan Viet, and Le Bin Ho.
