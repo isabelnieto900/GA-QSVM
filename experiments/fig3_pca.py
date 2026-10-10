@@ -19,6 +19,7 @@ import seaborn as sns
 
 from ga_qsvm.data import DATASET_LABELS, DATASETS, components_for, explained_variance_curve
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 FONTSIZE = 23
 PAPER_COMPONENTS_95 = {"digits": 30, "fashion": 200, "wine": 10, "cancer": 10}
 
@@ -64,7 +65,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--datasets", nargs="+", default=list(DATASETS), choices=DATASETS)
     parser.add_argument("--threshold", type=float, default=0.95)
-    parser.add_argument("--output-dir", type=Path, default=Path("results/fig3"))
+    parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "results" / "fig3")
     args = parser.parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
