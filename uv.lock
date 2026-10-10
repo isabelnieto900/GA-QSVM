@@ -260,6 +260,7 @@ dependencies = [
     { name = "scipy" },
     { name = "seaborn" },
     { name = "squlearn" },
+    { name = "threadpoolctl" },
 ]
 
 [package.dev-dependencies]
@@ -279,6 +280,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.14,<2" },
     { name = "seaborn", specifier = ">=0.13,<0.14" },
     { name = "squlearn", specifier = "==0.8.4" },
+    { name = "threadpoolctl", specifier = ">=3,<4" },
 ]
 
 [package.metadata.requires-dev]

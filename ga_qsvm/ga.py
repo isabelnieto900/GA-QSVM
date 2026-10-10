@@ -12,6 +12,7 @@ import copy
 import csv
 import json
 import random
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -126,11 +127,10 @@ def elitist_selection(population, fitnesses):
     return [qc for qc, _ in ranked[: len(population) // 2]]
 
 
-def evaluate(fitness: Callable, population, parallel: bool, max_workers: int | None = None) -> list[float]:
-    if not parallel:
+def evaluate(fitness: Callable, population, executor=None) -> list[float]:
+    if executor is None:
         return [float(fitness(qc)) for qc in population]
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        return [float(value) for value in executor.map(fitness, population)]
+    return [float(value) for value in executor.map(fitness, population)]
 
 
 def next_generation(config: GAConfig, population, fitnesses):
@@ -165,7 +165,17 @@ def run_ga(
     verbose: bool = True,
 ) -> GAResult:
     """Evolve circuits until the best fitness exceeds ``threshold``, it does not
-    improve for more than ``patience`` generations, or ``num_generation`` is reached."""
+    improve for more than ``patience`` generations, or ``num_generation`` is reached.
+
+    With ``parallel=True`` the circuits of each generation are evaluated in
+    ``max_workers`` processes; use ``run_tasks`` to run many GAs at once instead."""
+    if not parallel:
+        return _evolve(config, fitness, None, verbose)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        return _evolve(config, fitness, executor, verbose)
+
+
+def _evolve(config: GAConfig, fitness: Callable, executor, verbose: bool) -> GAResult:
     if config.seed is not None:
         random.seed(config.seed)
         np.random.seed(config.seed)
@@ -175,7 +185,7 @@ def run_ga(
     stale, stop_reason = 0, "max_generations"
     history = []
     for generation in range(1, config.num_generation + 1):
-        fitnesses = evaluate(fitness, population, parallel, max_workers)
+        fitnesses = evaluate(fitness, population, executor)
         index = int(np.argmax(fitnesses))
         if best_circuit is None:
             best_circuit = copy.deepcopy(population[index])
@@ -210,3 +220,50 @@ def run_ga(
         population = next_generation(config, population, fitnesses)
 
     return GAResult(config, best_circuit, best_fitness, stop_reason, history)
+
+
+@dataclass
+class GATask:
+    """One GA run of a batch, saved to ``output_dir``."""
+
+    name: str
+    config: GAConfig
+    fitness: Callable[[qiskit.QuantumCircuit], float]
+    output_dir: Path
+
+
+def _single_thread_worker():
+    # One GA per core: stop numpy/BLAS from spawning extra threads in each process.
+    from threadpoolctl import threadpool_limits
+
+    threadpool_limits(1)
+
+
+def _run_task(task: GATask) -> dict:
+    if task.config.seed is None:
+        # Forked workers inherit the parent's random state; unseeded runs must differ.
+        random.seed()
+        np.random.seed()
+    start = time.perf_counter()
+    result = run_ga(task.config, task.fitness, parallel=False, verbose=False)
+    result.save(task.output_dir)
+    return {
+        "name": task.name,
+        "best_fitness": result.best_fitness,
+        "generations": len(result.history),
+        "stop_reason": result.stop_reason,
+        "seconds": time.perf_counter() - start,
+    }
+
+
+def run_tasks(tasks: list[GATask], jobs: int | None = None):
+    """Run independent GAs in parallel, one process per GA (``jobs`` at a time,
+    default: all cores). Yields a summary dict per run as it finishes; a failed
+    run yields ``{"name", "error"}`` instead of stopping the batch."""
+    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs, initializer=_single_thread_worker) as executor:
+        futures = {executor.submit(_run_task, task): task.name for task in tasks}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                yield future.result()
+            except Exception as exc:  # noqa: BLE001 - report and keep the batch running
+                yield {"name": futures[future], "error": repr(exc)}

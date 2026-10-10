@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from ga_qsvm.data import Split
-from ga_qsvm.ga import GAConfig, run_ga
+from ga_qsvm.ga import GAConfig, GATask, run_ga, run_tasks
 from ga_qsvm.kernels import QSVMFitness
 
 
@@ -75,6 +75,34 @@ def test_result_save_writes_artifacts(tmp_path):
     assert {p.name for p in output.iterdir()} == {
         "best_circuit.qpy", "best_circuit.txt", "summary.json", "history.csv"
     }
+
+
+def failing_fitness(qc):
+    raise RuntimeError("boom")
+
+
+def test_run_tasks_matches_serial_runs_and_reports_failures(tmp_path):
+    configs = {f"seed{seed}": GAConfig(num_qubits=3, num_circuit=4, num_generation=3, seed=seed) for seed in (0, 1)}
+    tasks = [GATask(name, config, structural_score, tmp_path / name) for name, config in configs.items()]
+    tasks.append(GATask("broken", GAConfig(num_qubits=3, num_circuit=4, seed=0), failing_fitness, tmp_path / "x"))
+
+    summaries = {summary["name"]: summary for summary in run_tasks(tasks, jobs=2)}
+
+    assert "boom" in summaries["broken"]["error"]
+    for name, config in configs.items():
+        serial = run_ga(config, structural_score, parallel=False, verbose=False)
+        assert summaries[name]["best_fitness"] == serial.best_fitness
+        assert (tmp_path / name / "summary.json").exists()
+
+
+def test_run_tasks_unseeded_runs_differ(tmp_path):
+    tasks = [
+        GATask(str(i), GAConfig(num_qubits=4, num_circuit=8, num_generation=1), structural_score, tmp_path / str(i))
+        for i in range(4)
+    ]
+    list(run_tasks(tasks, jobs=4))
+    circuits = {(tmp_path / str(i) / "best_circuit.txt").read_text() for i in range(4)}
+    assert len(circuits) > 1
 
 
 def test_qsvm_fitness_on_tiny_split():
